@@ -2,7 +2,6 @@ from flask import Flask, request, send_file, render_template
 import pdfplumber
 import pandas as pd
 import os
-import tempfile
 
 app = Flask(__name__)
 
@@ -13,7 +12,7 @@ def upload_file():
         if pdf_file:
             text_data = extract_text_from_pdf(pdf_file)
             output_path = save_to_excel(text_data)
-            return send_file(output_path, as_attachment=True)
+            return render_template("index.html", url=output_path)  # Pass the file path to the template
     return render_template("index.html")
 
 def extract_text_from_pdf(pdf):
@@ -24,9 +23,7 @@ def extract_text_from_pdf(pdf):
     return "\n".join(filter(None, extracted_text))
 
 def save_to_excel(data):
-    # Save the Excel file to a temporary directory
-    temp_dir = tempfile.mkdtemp()  # Create a temporary directory
-    output_path = os.path.join(temp_dir, "converted.xlsx")  # Set path for the new file
+    output_path = "converted.xlsx"
     df = pd.DataFrame({'Extracted Text': [data]})
     df.to_excel(output_path, index=False)
     return output_path
