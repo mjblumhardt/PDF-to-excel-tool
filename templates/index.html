@@ -11,5 +11,10 @@
         <input type="file" name="file" required>
         <button type="submit">Convert</button>
     </form>
+
+    {% if url %}
+        <h3>Conversion Complete!</h3>
+        <p>Your Excel file is ready. <a href="{{ url }}" download>Click here to download</a>.</p>
+    {% endif %}
 </body>
 </html>
