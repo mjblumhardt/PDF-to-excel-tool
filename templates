@@ -1,6 +1,6 @@
 your-repo/
 ├── app.py
 ├── templates/
-│   └── index.html  # Your existing HTML file
+│   └── index.html  
 ├── requirements.txt
 └── Procfile
