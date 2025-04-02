@@ -12,17 +12,26 @@ def upload_file():
     if request.method == "POST":
         pdf_file = request.files["file"]
         if pdf_file:
-            file_path = os.path.join("uploads", pdf_file.filename)
-            pdf_file.save(file_path)
+            try:
+                # ✅ Ensure "uploads" directory exists before saving the file
+                os.makedirs("uploads", exist_ok=True)
 
-            text_data = extract_text_from_pdf(file_path)
-            
-            if not text_data.strip():
-                text_data = extract_text_with_ocr(file_path)
+                file_path = os.path.join("uploads", pdf_file.filename)
+                pdf_file.save(file_path)
 
-            output_path = save_to_excel(text_data)
+                # ✅ Extract text with pdfplumber first, fallback to OCR if needed
+                text_data = extract_text_from_pdf(file_path)
+                
+                if not text_data.strip():
+                    text_data = extract_text_with_ocr(file_path)
 
-            return send_file(output_path, as_attachment=True)
+                output_path = save_to_excel(text_data)
+
+                return send_file(output_path, as_attachment=True)
+
+            except Exception as e:
+                print(f"Error: {str(e)}")  # Log the error
+                return f"Error processing file: {str(e)}", 500
 
     return render_template("index.html")
 
@@ -57,5 +66,5 @@ def save_to_excel(data):
     return output_path
 
 if __name__ == "__main__":
-    os.makedirs("uploads", exist_ok=True)
+    os.makedirs("uploads", exist_ok=True)  # Ensure upload directory exists at startup
     app.run(host="0.0.0.0", port=5000)
