@@ -1,6 +1,0 @@
-your-repo/
-├── app.py
-├── templates/
-│   └── index.html  
-├── requirements.txt
-└── Procfile
