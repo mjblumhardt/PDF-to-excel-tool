@@ -21,7 +21,8 @@ def upload_file():
                 # Extract text using pdfplumber first, fallback to OCR if needed
                 text_data, tables = extract_text_and_tables(file_path)
                 
-                if not text_data.strip():
+                # Fix: Check if the extracted text is empty (check the list, not using .strip())
+                if not text_data or all(line == "" for line in text_data):
                     text_data = extract_text_with_ocr(file_path)
 
                 output_path = save_to_excel(text_data, tables)
