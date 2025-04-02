@@ -77,6 +77,13 @@ def extract_text(file_path):
             for img in images:
                 ocr_text = pytesseract.image_to_string(img)
                 text.extend(ocr_text.split('\n'))
+
+# 👇 PUT DEBUG PRINTS HERE 👇
+        print("\n=== WHAT THE CODE SEES ===")
+        print("(This shows text from your PDF)")
+        for line in text:
+            print(f"Line: {line}")
+    
     except Exception as e:
         print(f"Extraction error: {str(e)}")
     return [line.strip() for line in text if line.strip()]
