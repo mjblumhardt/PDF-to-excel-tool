@@ -3,3 +3,5 @@ pdfplumber
 pandas
 openpyxl
 gunicorn
+pytesseract
+pdf2image
