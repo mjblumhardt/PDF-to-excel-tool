@@ -14,23 +14,20 @@ def upload_file():
         if pdf_file:
             try:
                 os.makedirs("uploads", exist_ok=True)
-
                 file_path = os.path.join("uploads", pdf_file.filename)
                 pdf_file.save(file_path)
 
-                # Extract text using pdfplumber first, fallback to OCR if needed
+                # Extract text and tables from PDF
                 text_data, tables = extract_text_and_tables(file_path)
-                
-                # Fix: Check if the extracted text is empty (check the list, not using .strip())
+                # If no text is extracted, fall back to OCR
                 if not text_data or all(line == "" for line in text_data):
                     text_data = extract_text_with_ocr(file_path)
 
                 output_path = save_to_excel(text_data, tables)
-
                 return send_file(output_path, as_attachment=True)
 
             except Exception as e:
-                print(f"Error: {str(e)}")  # Log the error
+                print(f"Error: {str(e)}")
                 return f"Error processing file: {str(e)}", 500
 
     return render_template("index.html")
@@ -38,22 +35,20 @@ def upload_file():
 def extract_text_and_tables(file_path):
     extracted_text = []
     tables = []
-
     try:
         with pdfplumber.open(file_path) as pdf_doc:
             for page in pdf_doc.pages:
                 # Extract text
                 text = page.extract_text()
                 if text:
-                    extracted_text.extend(text.split("\n"))  # Split into lines
-
+                    extracted_text.extend(text.split("\n"))
                 # Extract tables (if any)
-                table = page.extract_tables()
-                if table:
-                    tables.append(table)
+                page_tables = page.extract_tables()
+                if page_tables:
+                    for t in page_tables:
+                        tables.append(t)
     except Exception as e:
         return f"Error reading PDF: {str(e)}", []
-
     return extracted_text if extracted_text else ["No text found"], tables
 
 def extract_text_with_ocr(file_path):
@@ -62,31 +57,35 @@ def extract_text_with_ocr(file_path):
         images = convert_from_path(file_path)
         for img in images:
             extracted_text = pytesseract.image_to_string(img)
-            text.extend(extracted_text.split("\n"))  # Split OCR text into lines
+            text.extend(extracted_text.split("\n"))
     except Exception as e:
         return [f"OCR failed: {str(e)}"]
-    
     return text if text else ["No text found (even with OCR)."]
 
 def save_to_excel(data, tables):
     output_path = "converted.xlsx"
-
-    # Convert text data to DataFrame where each line is a new row
+    # Save text data to a DataFrame (each line as a row)
     text_df = pd.DataFrame({'Extracted Text': data})
     
-    # Handle extracted tables
     with pd.ExcelWriter(output_path) as writer:
-        # Save the text data
         text_df.to_excel(writer, sheet_name='Text Data', index=False)
         
-        # Save any extracted tables
+        # Process and save each extracted table to its own sheet
         for i, table in enumerate(tables):
-            table_df = pd.DataFrame(table[1:], columns=table[0])  # Convert to DataFrame
+            # Assume first row is header
+            header = table[0]
+            fixed_rows = []
+            for row in table[1:]:
+                if len(row) < len(header):
+                    row = row + [''] * (len(header) - len(row))
+                elif len(row) > len(header):
+                    row = row[:len(header)]
+                fixed_rows.append(row)
+            table_df = pd.DataFrame(fixed_rows, columns=header)
             table_df.to_excel(writer, sheet_name=f'Table {i+1}', index=False)
-
+            
     return output_path
 
 if __name__ == "__main__":
     os.makedirs("uploads", exist_ok=True)
     app.run(host="0.0.0.0", port=5000)
-
