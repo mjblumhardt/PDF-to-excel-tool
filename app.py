@@ -217,16 +217,23 @@ def upload_file():
             output_path = "converted.xlsx"
             df.to_excel(output_path, index=False, engine='openpyxl')
             
-            return render_template("index.html", url=output_path)
+            # Send the file directly instead of rendering template
+            response = send_file(
+                output_path,
+                as_attachment=True,
+                download_name="converted.xlsx",
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            
+            # Clean up temporary files
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                
+            return response
 
         except Exception as e:
             return f"Error processing file: {str(e)}", 500
-        finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
 
     return render_template("index.html")
-
-if __name__ == "__main__":
-    os.makedirs("uploads", exist_ok=True)
-    app.run(host="0.0.0.0", port=5000)
