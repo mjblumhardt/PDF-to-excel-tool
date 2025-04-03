@@ -8,54 +8,78 @@ import pytesseract
 
 app = Flask(__name__)
 
-# Enhanced AV Equipment Patterns
-AV_PATTERNS = {
-    'manufacturer': re.compile(
-        r'(Manufacturer|Mfg|Brand)[\s\#\:]+\s*([A-Za-z]{2,})',
+# Enhanced patterns for AV equipment detection
+PATTERNS = {
+    'manufacturer_number': re.compile(
+        r'(?:Manufacturer\s*[\#\:]?|Mfg\s*[\#\:]?|Part\s*No)\s*([A-Z0-9\-]+)',
         re.IGNORECASE
     ),
-    'mfg_number': re.compile(
-        r'(?:Part\s*(?:No|Number|#)|Mfg\s*[\#\:]|Model\s*(?:No|Number|#)|Item\s*ID)[\s\:\-]+\s*([A-Z0-9\-\.\/]{4,})',
-        re.IGNORECASE
-    ),
-    'sku': re.compile(
-        r'(SKU|Stock\s*No|Retailer\s*ID)[\s\:\-]+\s*([A-Z0-9\-]{5,})',
+    'item_number': re.compile(
+        r'(?:Item\s*[\#\:]?|SKU)\s*([A-Z0-9\-]+)',
         re.IGNORECASE
     ),
     'quantity': re.compile(
-        r'(Quantity|Qty|Units)[\s\:\-]+\s*(\d+)',
+        r'(?:Quantity|Qty)\s*[\:\s]+(\d+)',
         re.IGNORECASE
     ),
     'price': re.compile(
-        r'(Price|Cost|Each|Unit\s*Price)[\s\:\-]+\s*\$?((?:\d{1,3}[\,\.]?)+\d{1,3}(?:[\.\,]\d{2})?)',
+        r'(?:Price|Each|Unit\s*Price)\s*[\:\s]+\$?(\d+[\.,]?\d{0,2})',
         re.IGNORECASE
     ),
     'description': re.compile(
-        r'(Description|Product|Item)[\s\:\-]+\s*(.+?)(?=\s*(?:Manufacturer|Mfg\s*[\#\:]|Qty|Price|\d{2,}\s*[A-Z]|$))',
+        r'(?:Description|Product)\s*[\:\s]+(.+?)(?=\s*(?:Manufacturer|Qty|Price|$))',
         re.IGNORECASE | re.DOTALL
-    ),
-    'upc': re.compile(
-        r'\b(UPC|EAN)[\s\:\-]+\s*(\d{12,13})\b',
-        re.IGNORECASE
     )
 }
 
-MANUFACTURERS = {
-    'ross', 'sony', 'panasonic', 'shure', 'sennheiser', 'qsc', 'bose',
-    'crestron', 'extron', 'biamp', 'dante', 'poly', 'logitech', 'yamaha',
-    'jbl', 'cisco', 'aten', 'blackmagic', 'ajax', 'lumens', 'epson', 'barco'
-}
+@app.route("/", methods=["GET", "POST"])
+def upload_file():
+    if request.method == "POST":
+        pdf_file = request.files["file"]
+        if pdf_file:
+            try:
+                os.makedirs("uploads", exist_ok=True)
+                file_path = os.path.join("uploads", pdf_file.filename)
+                pdf_file.save(file_path)
+
+                # Extract and process data
+                text_data = extract_text(file_path)
+                tables = extract_tables(file_path)
+                structured_data = process_data(text_data, tables)
+
+                # Create DataFrame with required columns
+                df = pd.DataFrame(structured_data, columns=[
+                    'Manufacturer Number', 
+                    'Item Number', 
+                    'Description', 
+                    'Quantity', 
+                    'Price', 
+                    'Notes'
+                ])
+
+                # Generate and return Excel file
+                output_path = "converted.xlsx"
+                df.to_excel(output_path, index=False, engine='openpyxl')
+                return send_file(output_path, as_attachment=True)
+
+            except Exception as e:
+                return f"Error processing file: {str(e)}", 500
+            finally:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+    return render_template("index.html")
 
 def extract_text(file_path):
     text = []
     try:
+        # PDF text extraction
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text.extend(page_text.split('\n'))
         
-        # OCR Fallback
+        # OCR fallback
         if not text or all(line.strip() == '' for line in text):
             images = convert_from_path(file_path)
             for img in images:
@@ -81,159 +105,101 @@ def extract_tables(file_path):
 def process_data(text_lines, tables):
     items = []
     current_item = {
-        'manufacturer': '',
-        'mfg_number': '',
-        'description': '',
-        'quantity': '',
-        'price': '',
-        'sku': '',
-        'upc': '',
-        'notes': []
+        'Manufacturer Number': '',
+        'Item Number': '',
+        'Description': '',
+        'Quantity': 1,
+        'Price': 0.0,
+        'Notes': []
     }
 
     # Process text lines
     for line in text_lines:
-        line = re.sub(r'\s+', ' ', line).strip()
-        
-        # Manufacturer detection
-        mfg_match = AV_PATTERNS['manufacturer'].search(line)
-        if mfg_match and mfg_match.group(2).lower() in MANUFACTURERS:
-            if current_item['manufacturer']:
-                items.append(current_item)
-                current_item = current_item.copy()
-                current_item.update({
-                    'manufacturer': '',
-                    'mfg_number': '',
-                    'description': '',
-                    'quantity': '',
-                    'price': '',
-                    'sku': '',
-                    'upc': '',
-                    'notes': []
-                })
-            current_item['manufacturer'] = mfg_match.group(2).strip()
+        # Manufacturer Number
+        mfg_match = PATTERNS['manufacturer_number'].search(line)
+        if mfg_match:
+            current_item['Manufacturer Number'] = mfg_match.group(1).strip()
             line = line.replace(mfg_match.group(0), '')
 
-        # Field extraction
-        for field in ['mfg_number', 'sku', 'quantity', 'price', 'upc']:
-            match = AV_PATTERNS[field].search(line)
-            if match:
-                current_item[field] = sanitize_field(field, match.group(2))
-                line = line.replace(match.group(0), '')
+        # Item Number
+        item_match = PATTERNS['item_number'].search(line)
+        if item_match:
+            current_item['Item Number'] = item_match.group(1).strip()
+            line = line.replace(item_match.group(0), '')
 
-        # Description extraction
-        desc_match = AV_PATTERNS['description'].search(line)
-        if desc_match and not current_item['description']:
-            current_item['description'] = desc_match.group(2).strip()
+        # Quantity
+        qty_match = PATTERNS['quantity'].search(line)
+        if qty_match:
+            current_item['Quantity'] = int(qty_match.group(1))
+            line = line.replace(qty_match.group(0), '')
+
+        # Price
+        price_match = PATTERNS['price'].search(line)
+        if price_match:
+            current_item['Price'] = float(price_match.group(1).replace(',',''))
+            line = line.replace(price_match.group(0), '')
+
+        # Description
+        desc_match = PATTERNS['description'].search(line)
+        if desc_match and not current_item['Description']:
+            current_item['Description'] = desc_match.group(1).strip()
             line = line.replace(desc_match.group(0), '')
 
-        # Collect remaining notes
+        # Collect remaining text as notes
         if line.strip():
-            current_item['notes'].append(line.strip())
+            current_item['Notes'].append(line.strip())
 
     # Process tables
     for table in tables:
-        if not table or len(table) < 2:
+        if len(table) < 2:
             continue
 
         headers = [cell.strip().lower() for cell in table[0] if cell]
-        col_map = {}
+        col_mapping = {}
         
-        # Map columns to fields
+        # Map columns based on headers
         for idx, header in enumerate(headers):
-            if 'mfg' in header or 'manufacturer' in header or 'part' in header:
-                col_map['mfg_number'] = idx
-            elif 'desc' in header or 'item' in header or 'product' in header:
-                col_map['description'] = idx
-            elif 'qty' in header or 'quantity' in header:
-                col_map['quantity'] = idx
-            elif 'price' in header or 'cost' in header:
-                col_map['price'] = idx
-            elif 'sku' in header or 'stock' in header:
-                col_map['sku'] = idx
-            elif 'upc' in header or 'ean' in header:
-                col_map['upc'] = idx
+            if 'mfg' in header or 'manufacturer' in header:
+                col_mapping['mfg'] = idx
+            elif 'item' in header or 'sku' in header:
+                col_mapping['item'] = idx
+            elif 'desc' in header:
+                col_mapping['desc'] = idx
+            elif 'qty' in header:
+                col_mapping['qty'] = idx
+            elif 'price' in header:
+                col_mapping['price'] = idx
 
         for row in table[1:]:
             item = current_item.copy()
-            for field, col_idx in col_map.items():
-                if col_idx < len(row):
-                    item[field] = sanitize_field(field, row[col_idx])
-            if item['mfg_number']:
-                items.append(item)
+            for col, idx in col_mapping.items():
+                if idx < len(row):
+                    value = str(row[idx]).strip()
+                    if col == 'mfg':
+                        item['Manufacturer Number'] = value
+                    elif col == 'item':
+                        item['Item Number'] = value
+                    elif col == 'desc':
+                        item['Description'] = value
+                    elif col == 'qty':
+                        item['Quantity'] = int(value) if value.isdigit() else 1
+                    elif col == 'price':
+                        item['Price'] = float(value.replace(',','')) if value else 0.0
+            items.append(item)
 
-    if current_item['manufacturer']:
+    # Add final item if valid
+    if current_item['Manufacturer Number'] or current_item['Item Number']:
         items.append(current_item)
 
-    # Post-process items
+    # Clean notes field
     for item in items:
-        if not item['description'] and item['notes']:
-            item['description'] = item['notes'].pop(0)
-        item['notes'] = ' | '.join(item['notes'])
-        
-        # Clean numerical fields
-        item['quantity'] = int(re.sub(r'[^\d]', '', item['quantity'])) if item['quantity'] else 1
-        item['price'] = float(re.sub(r'[^\d.]', '', item['price'])) if item['price'] else 0.0
+        item['Notes'] = ' | '.join(item['Notes'])
+        if not item['Description'] and item['Notes']:
+            # Use first note as description if empty
+            item['Description'] = item['Notes'].split('|')[0].strip()
 
     return items
 
-def sanitize_field(field, value):
-    if field == 'quantity':
-        return str(int(re.sub(r'[^\d]', '', value))) if value else '1'
-    elif field == 'price':
-        return re.sub(r'[^\d.]', '', value) if value else '0.00'
-    elif field == 'mfg_number':
-        return re.sub(r'[^A-Z0-9\-/]', '', value.upper())
-    elif field == 'sku':
-        return re.sub(r'[^A-Z0-9\-]', '', value.upper())
-    elif field == 'upc':
-        return re.sub(r'[^\d]', '', value)
-    return value.strip()
-
-@app.route("/", methods=["GET", "POST"])
-def upload_file():
-    if request.method == "POST":
-        if 'file' not in request.files:
-            return "No file uploaded", 400
-            
-        pdf_file = request.files['file']
-        if pdf_file.filename == '':
-            return "Invalid file", 400
-
-        try:
-            os.makedirs("uploads", exist_ok=True)
-            file_path = os.path.join("uploads", pdf_file.filename)
-            pdf_file.save(file_path)
-
-            text_data = extract_text(file_path)
-            tables = extract_tables(file_path)
-            structured_data = process_data(text_data, tables)
-
-            df = pd.DataFrame(structured_data, columns=[
-                'manufacturer', 'mfg_number', 'description',
-                'quantity', 'price', 'sku', 'upc', 'notes'
-            ])
-
-            output_path = "converted.xlsx"
-            df.to_excel(output_path, index=False, engine='openpyxl')
-            
-            # Send the file directly instead of rendering template
-            response = send_file(
-                output_path,
-                as_attachment=True,
-                download_name="converted.xlsx",
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-            
-            # Clean up temporary files
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                
-            return response
-
-        except Exception as e:
-            return f"Error processing file: {str(e)}", 500
-
-    return render_template("index.html")
+if __name__ == "__main__":
+    os.makedirs("uploads", exist_ok=True)
+    app.run(host="0.0.0.0", port=5000)
