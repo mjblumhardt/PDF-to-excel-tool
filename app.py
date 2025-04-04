@@ -7,6 +7,10 @@ from flask import Flask, request, send_file, render_template
 from pdf2image import convert_from_path
 import pytesseract
 
+if os.environ.get('RENDER'):
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+else:
+    pytesseract.pytesseract.tesseract_cmd = r'/app/.apt/usr/bin/tesseract'  # Render-specific path
 # Configure application
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
