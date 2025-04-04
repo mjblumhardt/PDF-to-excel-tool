@@ -7,18 +7,15 @@ from flask import Flask, request, send_file, render_template
 from pdf2image import convert_from_path
 import pytesseract
 
+# Configure Tesseract paths
 if os.environ.get('RENDER'):
     pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 else:
-    pytesseract.pytesseract.tesseract_cmd = r'/app/.apt/usr/bin/tesseract'  # Render-specific path
-# Configure application
+    pytesseract.pytesseract.tesseract_cmd = r'/app/.apt/usr/bin/tesseract'
+
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 
-# Configure Tesseract for Render deployment
-pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-
-# Manufacturer detection profiles
 MANUFACTURER_PROFILES = {
     'B&H': {
         'patterns': [
@@ -45,24 +42,18 @@ def upload_file():
         pdf_file = request.files["file"]
         if pdf_file and pdf_file.filename.endswith('.pdf'):
             try:
-                # Create uploads directory
                 os.makedirs("uploads", exist_ok=True)
                 file_path = os.path.join("uploads", pdf_file.filename)
                 pdf_file.save(file_path)
 
-                # Extract data from PDF
                 text_data = extract_text_with_fallback(file_path)
                 tables = extract_tables(file_path)
                 
-                # Process data
                 structured_data = []
                 structured_data += process_text_lines(text_data)
                 structured_data += process_tables(tables)
                 
-                # Create final dataframe
                 df = clean_dataframe(structured_data)
-                
-                # Generate Excel file
                 output_path = "converted.xlsx"
                 df.to_excel(output_path, index=False, engine='openpyxl')
                 
@@ -72,7 +63,6 @@ def upload_file():
                 app.logger.error(f"Processing failed: {str(e)}")
                 return f"Error processing PDF: {str(e)}", 500
             finally:
-                # Cleanup temporary files
                 for path in [file_path, "converted.xlsx"]:
                     if path and os.path.exists(path):
                         os.remove(path)
@@ -81,7 +71,6 @@ def upload_file():
     return render_template("index.html")
 
 def extract_text_with_fallback(file_path):
-    """Extract text with OCR fallback"""
     try:
         text = []
         with pdfplumber.open(file_path) as pdf:
@@ -90,7 +79,6 @@ def extract_text_with_fallback(file_path):
                 if page_text:
                     text.extend(page_text.split('\n'))
         
-        # OCR fallback if no text found
         if not text or all(line.strip() == '' for line in text):
             images = convert_from_path(file_path, dpi=300)
             for img in images:
@@ -103,7 +91,6 @@ def extract_text_with_fallback(file_path):
         return []
 
 def extract_tables(file_path):
-    """Extract tables with multiple strategies"""
     try:
         tables = []
         with pdfplumber.open(file_path) as pdf:
@@ -120,7 +107,6 @@ def extract_tables(file_path):
         return []
 
 def process_text_lines(text_lines):
-    """Process individual text lines"""
     items = []
     current_item = new_item()
     
@@ -129,7 +115,6 @@ def process_text_lines(text_lines):
         if not line:
             continue
 
-        # Manufacturer detection
         mfg_num, mfg_match = extract_manufacturer(line)
         if mfg_num:
             if current_item['Manufacturer Number']:
@@ -138,21 +123,18 @@ def process_text_lines(text_lines):
             current_item['Manufacturer Number'] = mfg_num
             line = line.replace(mfg_match.group(), '').strip()
 
-        # Quantity extraction
         if not current_item['Quantity']:
             qty, qty_match = extract_quantity(line)
             if qty:
                 current_item['Quantity'] = qty
                 line = line.replace(qty_match.group(), '').strip()
 
-        # Price extraction
         if not current_item['Price']:
             price, price_match = extract_price(line)
             if price:
                 current_item['Price'] = price
                 line = line.replace(price_match.group(), '').strip()
 
-        # Description handling
         if line:
             current_item['Description'].append(line)
 
@@ -162,7 +144,6 @@ def process_text_lines(text_lines):
     return items
 
 def process_tables(tables):
-    """Process PDF tables"""
     items = []
     for table in tables:
         if len(table) < 2:
@@ -196,7 +177,6 @@ def process_tables(tables):
     return items
 
 def clean_dataframe(raw_data):
-    """Clean and structure final dataframe"""
     df = pd.DataFrame(raw_data, columns=[
         'Manufacturer Number', 
         'Description', 
@@ -205,17 +185,16 @@ def clean_dataframe(raw_data):
         'Notes'
     ])
     
-    # Data cleaning operations
+    # Fixed missing parenthesis
     df['Description'] = df['Description'].apply(
-        lambda x: ' '.join(x) if isinstance(x, list) else str(x)
+        lambda x: ' '.join(x) if isinstance(x, list) else str(x))
+    
     df['Price'] = df['Price'].apply(
         lambda x: re.sub(r'[^\d.]', '', str(x)) if x else '')
     df['Quantity'] = df['Quantity'].apply(
         lambda x: re.sub(r'\D', '', str(x)) if x else '')
     
     return df.drop_duplicates().reset_index(drop=True)
-
-# Helper functions --------------------------------------------------
 
 def new_item():
     return {
