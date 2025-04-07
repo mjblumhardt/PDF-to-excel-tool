@@ -17,6 +17,13 @@ app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 
 MANUFACTURER_PROFILES = {
+    'Ross Video': {
+        'patterns': [
+            r'\b([A-Z]{3,}-[A-Z0-9-]+)\b',  # Matches CUF-124, TD2S-PANEL
+            r'\b([A-Z]{3,}\d+-\w+)\b'       # Matches XDS0-0001-CPS
+        ],
+        'keywords': ['ROSS', 'Carbonite', 'Ultrix']
+    },
     'B&H': {
         'patterns': [
             r'\b(?:MFR|mfr|Manufacturer)\s*[#:]?\s*([A-Z0-9-]+)\b',
@@ -115,6 +122,7 @@ def process_text_lines(text_lines):
         if not line:
             continue
 
+        # Ross-specific pattern matching
         mfg_num, mfg_match = extract_manufacturer(line)
         if mfg_num:
             if current_item['Manufacturer Number']:
@@ -129,11 +137,18 @@ def process_text_lines(text_lines):
                 current_item['Quantity'] = qty
                 line = line.replace(qty_match.group(), '').strip()
 
-        if not current_item['Price']:
-            price, price_match = extract_price(line)
-            if price:
-                current_item['Price'] = price
-                line = line.replace(price_match.group(), '').strip()
+        # Extract Ross pricing components
+        if not current_item['List Price']:
+            list_price, lp_match = extract_price(line, prefix='List Price:?')
+            if list_price:
+                current_item['List Price'] = list_price
+                line = line.replace(lp_match.group(), '').strip()
+
+        if not current_item['Discount']:
+            discount, disc_match = extract_discount(line)
+            if discount:
+                current_item['Discount'] = discount
+                line = line.replace(disc_match.group(), '').strip()
 
         if line:
             current_item['Description'].append(line)
@@ -151,26 +166,37 @@ def process_tables(tables):
 
         headers = [str(cell).strip().lower() for cell in table[0]]
         col_map = {
-            'mfg': detect_column(headers, ['mfg', 'manufacturer', 'part']),
-            'desc': detect_column(headers, ['desc', 'description', 'item']),
+            'product_info': detect_column(headers, ['product info', 'item']),
             'qty': detect_column(headers, ['qty', 'quantity']),
-            'price': detect_column(headers, ['price', 'cost', 'unit'])
+            'list_price': detect_column(headers, ['list price']),
+            'disc': detect_column(headers, ['disc.', 'discount']),
+            'net_unit': detect_column(headers, ['net unit']),
+            'net_price': detect_column(headers, ['net price'])
         }
 
         for row in table[1:]:
             item = new_item()
-            for idx, cell in enumerate(row):
-                value = str(cell).strip() if cell else ''
-                
-                if idx == col_map['mfg']:
-                    item['Manufacturer Number'] = value
-                elif idx == col_map['desc']:
-                    item['Description'] = [value]
-                elif idx == col_map['qty']:
-                    item['Quantity'] = value
-                elif idx == col_map['price']:
-                    item['Price'] = value
+            product_info = str(row[col_map['product_info']]).strip() if col_map['product_info'] is not None else ''
             
+            # Extract Ross product codes from table cells
+            mfg_match = re.match(r'^[→\s]*([A-Z-0-9]+)\b', product_info)
+            if mfg_match:
+                item['Manufacturer Number'] = mfg_match.group(1).strip()
+                description = product_info.replace(mfg_match.group(0), '').strip()
+                item['Description'] = description
+
+            # Map Ross-specific columns
+            if col_map['qty'] is not None:
+                item['Quantity'] = str(row[col_map['qty']]).strip()
+            if col_map['list_price'] is not None:
+                item['List Price'] = str(row[col_map['list_price']]).strip()
+            if col_map['disc'] is not None:
+                item['Discount'] = str(row[col_map['disc']]).strip()
+            if col_map['net_unit'] is not None:
+                item['Net Unit'] = str(row[col_map['net_unit']]).strip()
+            if col_map['net_price'] is not None:
+                item['Net Price'] = str(row[col_map['net_price']]).strip()
+
             if item['Manufacturer Number']:
                 items.append(item)
     
@@ -179,20 +205,25 @@ def process_tables(tables):
 def clean_dataframe(raw_data):
     df = pd.DataFrame(raw_data, columns=[
         'Manufacturer Number', 
-        'Description', 
-        'Quantity', 
-        'Price', 
+        'Description',
+        'Quantity',
+        'List Price',
+        'Discount',
+        'Net Unit',
+        'Net Price',
         'Notes'
     ])
     
-    # Fixed missing parenthesis
-    df['Description'] = df['Description'].apply(
-        lambda x: ' '.join(x) if isinstance(x, list) else str(x))
+    # Clean numerical fields
+    for col in ['List Price', 'Discount', 'Net Unit', 'Net Price']:
+        df[col] = df[col].apply(lambda x: re.sub(r'[^\d.]', '', str(x)) if x else '')
     
-    df['Price'] = df['Price'].apply(
-        lambda x: re.sub(r'[^\d.]', '', str(x)) if x else '')
     df['Quantity'] = df['Quantity'].apply(
         lambda x: re.sub(r'\D', '', str(x)) if x else '')
+    
+    # Clean description field
+    df['Description'] = df['Description'].apply(
+        lambda x: ' '.join(x) if isinstance(x, list) else str(x))
     
     return df.drop_duplicates().reset_index(drop=True)
 
@@ -201,7 +232,10 @@ def new_item():
         'Manufacturer Number': '',
         'Description': [],
         'Quantity': '',
-        'Price': '',
+        'List Price': '',
+        'Discount': '',
+        'Net Unit': '',
+        'Net Price': '',
         'Notes': []
     }
 
@@ -218,9 +252,13 @@ def extract_quantity(text):
     match = re.search(r'\b(\d+)\s*(?:pc|ea|units?)\b', text, re.IGNORECASE)
     return (match.group(1), match) if match else (None, None)
 
-def extract_price(text):
-    match = re.search(r'\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})', text)
+def extract_price(text, prefix=''):
+    match = re.search(rf'{prefix}\$?\s*(\d{{1,3}}(?:,\d{{3}})*\.\d{{2}})', text)
     return (match.group(1).replace(',', ''), match) if match else (None, None)
+
+def extract_discount(text):
+    match = re.search(r'\b(\d+)%\b', text)
+    return (match.group(1), match) if match else (None, None)
 
 def detect_column(headers, keywords):
     for idx, header in enumerate(headers):
